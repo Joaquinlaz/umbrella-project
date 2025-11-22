@@ -39,7 +39,7 @@ pipeline {
                     sh """
                     docker run --rm --network ${NETWORK_NAME} \
                     -v ${WORKSPACE}:/zap/wrk/:rw \
-                    -t owasp/zap2docker-stable zap-baseline.py \
+                    -t zaproxy/zap-stable zap-baseline.py \
                     -t http://${IMAGE_NAME}-test:5000 \
                     -r zap_report.html || true
                     """
