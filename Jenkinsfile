@@ -27,10 +27,10 @@ pipeline {
                     sh "docker run -d --network ${env.NETWORK_NAME} --name ${env.IMAGE_NAME}-test ${env.IMAGE_NAME}"
 
                     echo '--- Comprobando resolución y salud (retry 10x) ---'
-                    // Usamos una heredoc con doble comilla para que Groovy expanda ${env.*}
+                    // NOTA: escapamos los $ usados por la shell (\$) para que Groovy no los interprete
                     sh """
-                    for i in \$(seq 1 10); do
-                      docker run --rm --network ${env.NETWORK_NAME} curlimages/curl:8.2.1 -sS --max-time 5 http://${env.IMAGE_NAME}-test:5000/ && { echo "OK"; exit 0; } || { echo "Intento \$i: no disponible, esperando 3s"; sleep 3; }
+                    for i in \\$(seq 1 10); do
+                      docker run --rm --network ${env.NETWORK_NAME} curlimages/curl:8.2.1 -sS --max-time 5 http://${env.IMAGE_NAME}-test:5000/ && { echo "OK"; exit 0; } || { echo "Intento \\$i: no disponible, esperando 3s"; sleep 3; }
                     done
                     echo "ERROR: servicio en ${env.IMAGE_NAME}-test no responde"
                     exit 1
@@ -52,11 +52,11 @@ pipeline {
 
                     echo '--- Ejecutando DAST con OWASP ZAP (baseline) ---'
                     sh """
-                    docker run --name zap-scanner --network ${env.NETWORK_NAME} \
-                      -v zap-vol:/zap/wrk \
-                      -t zaproxy/zap-stable zap-baseline.py \
-                        -t http://${env.IMAGE_NAME}-test:5000 \
-                        -r zap_report.html \
+                    docker run --name zap-scanner --network ${env.NETWORK_NAME} \\
+                      -v zap-vol:/zap/wrk \\
+                      -t zaproxy/zap-stable zap-baseline.py \\
+                        -t http://${env.IMAGE_NAME}-test:5000 \\
+                        -r zap_report.html \\
                         -J zap_out.json || true
                     """
                     // El contenedor zap-scanner queda presente (exited) para copiar artefactos
@@ -82,10 +82,11 @@ pipeline {
                     """
 
                     // 2) Fallback: copiar desde volumen si zap-report sigue vacío
+                    // Escapamos \$(pwd) para que Groovy no lo procese
                     sh """
-                    if [ -z "$(ls -A zap-report 2>/dev/null)" ]; then
+                    if [ -z "\\$(ls -A zap-report 2>/dev/null)" ]; then
                       echo "zap-report vacío, intentando fallback: copiar desde volumen zap-vol"
-                      docker run --rm -v zap-vol:/zap/wrk -v \$(pwd)/zap-report:/out busybox sh -c 'cp -a /zap/wrk/. /out/ || true'
+                      docker run --rm -v zap-vol:/zap/wrk -v \\$(pwd)/zap-report:/out busybox sh -c 'cp -a /zap/wrk/. /out/ || true'
                     else
                       echo "docker cp produjo archivos."
                     fi
@@ -93,7 +94,7 @@ pipeline {
 
                     // 3) Si sigue vacío, inspeccionar dentro del contenedor para ver rutas
                     sh """
-                    if [ -z "$(ls -A zap-report 2>/dev/null)" ]; then
+                    if [ -z "\\$(ls -A zap-report 2>/dev/null)" ]; then
                       echo "Aún vacío: listando rutas dentro de zap-scanner para investigar..."
                       if docker inspect zap-scanner >/dev/null 2>&1; then
                         docker exec zap-scanner sh -c 'echo \"--- ls -la /zap\"; ls -la /zap || true'
