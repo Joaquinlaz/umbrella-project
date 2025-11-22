@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Aquí es donde Prometheus buscará métricas de tu App Umbrella
+  - job_name: 'umbrella-app'
+    static_configs:
+      # 'umbrella-prod' es el nombre que le daremos al contenedor en el Pipeline
+      - targets: ['umbrella-prod:5000']
