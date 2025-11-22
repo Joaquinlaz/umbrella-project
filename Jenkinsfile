@@ -3,8 +3,7 @@ pipeline {
     
     environment {
         IMAGE_NAME = "umbrella-app-vulnerable"
-        // Al llamar a tu carpeta "umbrella", Docker Compose crea la red así:
-        // nombrecarpeta_nombrered
+        // Asegúrate que esta red exista, o que docker-compose la haya creado.
         NETWORK_NAME = "umbrella_umbrella-net" 
     }
 
@@ -22,10 +21,9 @@ pipeline {
             steps {
                 script {
                     echo '--- Desplegando entorno de pruebas ---'
-                    // Limpiar contenedor previo si existe
                     sh "docker rm -f ${IMAGE_NAME}-test || true"
                     
-                    // Desplegar en la red compartida para que ZAP lo vea
+                    // Desplegar la app de prueba
                     sh "docker run -d --network ${NETWORK_NAME} --name ${IMAGE_NAME}-test ${IMAGE_NAME}"
                 }
             }
@@ -34,20 +32,36 @@ pipeline {
         stage('3. Security Scan (OWASP ZAP)') {
             steps {
                 script {
+                    echo '--- Esperando que la aplicación inicie (DNS propagation) ---'
+                    // SOLUCIÓN 1: Esperar a que el contenedor de prueba esté listo
+                    sh "sleep 20"
+
                     echo '--- Ejecutando DAST con OWASP ZAP ---'
-                    // ZAP ataca al contenedor usando su nombre de red
+                    
+                    // Limpieza preventiva por si un escaneo anterior falló
+                    sh "docker rm -f zap-scanner || true"
+
+                    // SOLUCIÓN 2: Ejecutar ZAP SIN volúmenes (-v) para evitar errores de permisos.
+                    // - Le damos un nombre fijo (--name zap-scanner)
+                    // - Quitamos el --rm para que el contenedor no se borre solo al terminar
+                    // - El '|| true' asegura que el pipeline continúe aunque encuentre vulnerabilidades
                     sh """
-                    docker run --rm --network ${NETWORK_NAME} -u 0 \
-                    -v ${WORKSPACE}:/zap/wrk/:rw \
+                    docker run --name zap-scanner --network ${NETWORK_NAME} \
                     -t zaproxy/zap-stable zap-baseline.py \
                     -t http://${IMAGE_NAME}-test:5000 \
                     -r zap_report.html || true
                     """
+
+                    echo '--- Extrayendo reporte del contenedor ---'
+                    // TRUCO: Copiamos el reporte desde adentro del contenedor hacia Jenkins
+                    sh "docker cp zap-scanner:/zap/wrk/zap_report.html ./zap_report.html"
+                    
+                    // Ahora sí borramos el contenedor de escaneo
+                    sh "docker rm -f zap-scanner"
                 }
             }
             post {
                 always {
-                    // Publicar reporte HTML
                     publishHTML target: [
                         allowMissing: false,
                         alwaysLinkToLastBuild: true,
@@ -65,9 +79,6 @@ pipeline {
                 script {
                     echo '--- Desplegando Producción ---'
                     sh "docker rm -f umbrella-prod || true"
-                    
-                    // Despliegue final.
-                    // Nombre 'umbrella-prod' coincide con prometheus.yml
                     sh "docker run -d --restart always --network ${NETWORK_NAME} --name umbrella-prod -p 5000:5000 ${IMAGE_NAME}"
                 }
             }
