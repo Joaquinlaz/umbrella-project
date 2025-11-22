@@ -208,5 +208,5 @@ def metrics():
 if __name__ == '__main__':
     # Verificar si existe DB, si no, inicializarla
     if not os.path.exists('example.db'):
-        import init_db
+        import create_db
     app.run(debug=True, host='0.0.0.0')
