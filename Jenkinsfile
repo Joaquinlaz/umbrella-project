@@ -37,7 +37,7 @@ pipeline {
                     echo '--- Ejecutando DAST con OWASP ZAP ---'
                     // ZAP ataca al contenedor usando su nombre de red
                     sh """
-                    docker run --rm --network ${NETWORK_NAME} \
+                    docker run --rm --network ${NETWORK_NAME} -u 0 \
                     -v ${WORKSPACE}:/zap/wrk/:rw \
                     -t zaproxy/zap-stable zap-baseline.py \
                     -t http://${IMAGE_NAME}-test:5000 \
