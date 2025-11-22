@@ -22,19 +22,19 @@ pipeline {
             script {
               echo '--- Asegurando red Docker ---'
               // crea la red si no existe (no falla si ya existe)
-              sh 'docker network create umbrella_umbrella-net || true'
+              sh "docker network create ${NETWORK_NAME} || true"
         
               echo '--- Desplegando entorno de pruebas ---'
               sh "docker rm -f ${IMAGE_NAME}-test || true"
         
               // lanzar la app
-              sh "docker run -d --network umbrella_umbrella-net --name ${IMAGE_NAME}-test ${IMAGE_NAME}"
+              sh "docker run -d --network ${NETWORK_NAME} --name ${IMAGE_NAME}-test ${IMAGE_NAME}"
         
               // Esperar y comprobar que el contenedor responde por nombre desde un contenedor temporal (retry)
               echo '--- Comprobando resolución y salud (retry 10x) ---'
               sh '''
               for i in $(seq 1 10); do
-                docker run --rm --network umbrella_umbrella-net curlimages/curl:8.2.1 -sS --max-time 5 http://${IMAGE_NAME}-test:5000/ && { echo "OK"; exit 0; } || echo "Intento $i: no disponible, esperando 3s" && sleep 3
+                docker run --rm --network ${NETWORK_NAME} curlimages/curl:8.2.1 -sS --max-time 5 http://${IMAGE_NAME}-test:5000/ && { echo "OK"; exit 0; } || echo "Intento $i: no disponible, esperando 3s" && sleep 3
               done
               echo "ERROR: servicio en ${IMAGE_NAME}-test no responde"; exit 1
               '''
@@ -51,40 +51,63 @@ pipeline {
               sh "docker volume create zap-vol"
         
               // arreglar permisos del volumen (asegurar que uid 1000 pueda escribir)
-              // usamos un contenedor temporal para chown dentro del volumen:
               sh "docker run --rm -v zap-vol:/zap/wrk busybox sh -c 'chmod -R 0777 /zap/wrk || chown -R 1000:1000 /zap/wrk || true'"
         
-              echo '--- Ejecutando DAST con OWASP ZAP (run as default user) ---'
-              // Ejecuta ZAP. ejecutar normalmente; si sigues con problemas de permisos puedes añadir --user root
+              echo '--- Ejecutando DAST con OWASP ZAP (baseline) ---'
+              // Generar HTML y JSON (diagnóstico)
               sh """
-              docker run --name zap-scanner --network umbrella_umbrella-net \
+              docker run --name zap-scanner --network ${NETWORK_NAME} \
                 -v zap-vol:/zap/wrk \
                 -t zaproxy/zap-stable zap-baseline.py \
                 -t http://${IMAGE_NAME}-test:5000 \
-                -r zap_report.html || true
+                -r zap_report.html \
+                -J zap_out.json || true
               """
-        
-              echo '--- Intentando extraer reporte del volumen de forma segura ---'
-              // Copiamos desde el volumen a workspace con un contenedor temporal que hace el cp (evita docker cp directo)
-              sh """
-              docker run --rm -v zap-vol:/zap/wrk -v \$(pwd):/out busybox sh -c 'if [ -f /zap/wrk/zap_report.html ]; then cp /zap/wrk/zap_report.html /out/; else echo \"No report generated\"; fi'
-              """
-        
-              // limpieza
-              sh "docker rm -f zap-scanner || true"
-              sh "docker volume rm zap-vol || true"
             }
           }
           post {
             always {
+              // No publicamos aquí: vamos a copiar todo el contenido en el siguiente stage
+              echo '--- ZAP scan finished (logs above) ---'
+            }
+          }
+        }
+
+        stage('3b. Collect ZAP artifacts') {
+          steps {
+            script {
+              echo '--- Copiando TODO /zap/wrk (assets + html) al workspace -> zap-report ---'
+              sh 'rm -rf zap-report || true'
+              sh 'mkdir -p zap-report'
+
+              // monta el volumen y copia todo su contenido al workspace (incluye subcarpetas)
+              sh "docker run --rm -v zap-vol:/zap/wrk -v \$(pwd)/zap-report:/out busybox sh -c 'cp -a /zap/wrk/. /out/ || true'"
+
+              // Mostrar lista y top del HTML para depuración inmediata
+              sh 'echo \"--- Listado zap-report ---\"'
+              sh 'ls -la zap-report || true'
+              sh 'echo \"--- Primeras 120 líneas de zap-report/zap_report.html ---\"'
+              sh 'head -n 120 zap-report/zap_report.html || echo \"zap_report.html no existe o está vacío\"'
+            }
+          }
+          post {
+            always {
+              // Archivar todos los assets para poder descargarlos desde la UI del build
+              archiveArtifacts artifacts: 'zap-report/**', allowEmptyArchive: true
+
+              // Publicar el HTML (ahora apuntando al directorio con los assets)
               publishHTML target: [
-                allowMissing: true,            // <-- importante: permitir missing para no romper el job si no se generó el informe
+                allowMissing: false,
                 alwaysLinkToLastBuild: true,
                 keepAll: true,
-                reportDir: '.',
+                reportDir: 'zap-report',
                 reportFiles: 'zap_report.html',
                 reportName: 'OWASP ZAP Security Report'
               ]
+
+              // limpieza del contenedor y volumen (si quieres mantener para debugging, comenta estas líneas)
+              sh "docker rm -f zap-scanner || true"
+              sh "docker volume rm zap-vol || true"
             }
           }
         }
