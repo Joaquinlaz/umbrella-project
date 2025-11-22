@@ -33,31 +33,34 @@ pipeline {
             steps {
                 script {
                     echo '--- Esperando que la aplicación inicie (DNS propagation) ---'
-                    // SOLUCIÓN 1: Esperar a que el contenedor de prueba esté listo
                     sh "sleep 20"
 
-                    echo '--- Ejecutando DAST con OWASP ZAP ---'
-                    
-                    // Limpieza preventiva por si un escaneo anterior falló
+                    echo '--- Preparando entorno ZAP ---'
+                    // 1. Limpieza previa
                     sh "docker rm -f zap-scanner || true"
+                    sh "docker volume rm zap-vol || true"
 
-                    // SOLUCIÓN 2: Ejecutar ZAP SIN volúmenes (-v) para evitar errores de permisos.
-                    // - Le damos un nombre fijo (--name zap-scanner)
-                    // - Quitamos el --rm para que el contenedor no se borre solo al terminar
-                    // - El '|| true' asegura que el pipeline continúe aunque encuentre vulnerabilidades
+                    // 2. Crear un volumen Docker temporal. 
+                    // Esto satisface el requisito de ZAP de tener algo montado, sin usar rutas de Windows.
+                    sh "docker volume create zap-vol"
+
+                    echo '--- Ejecutando DAST con OWASP ZAP ---'
+                    // 3. Ejecutar ZAP montando el volumen creado (-v zap-vol:/zap/wrk)
                     sh """
                     docker run --name zap-scanner --network ${NETWORK_NAME} \
+                    -v zap-vol:/zap/wrk \
                     -t zaproxy/zap-stable zap-baseline.py \
                     -t http://${IMAGE_NAME}-test:5000 \
                     -r zap_report.html || true
                     """
 
                     echo '--- Extrayendo reporte del contenedor ---'
-                    // TRUCO: Copiamos el reporte desde adentro del contenedor hacia Jenkins
+                    // 4. Copiamos el reporte. Docker es listo y sabe leer del volumen a través del contenedor.
                     sh "docker cp zap-scanner:/zap/wrk/zap_report.html ./zap_report.html"
                     
-                    // Ahora sí borramos el contenedor de escaneo
+                    // 5. Limpieza final
                     sh "docker rm -f zap-scanner"
+                    sh "docker volume rm zap-vol"
                 }
             }
             post {
